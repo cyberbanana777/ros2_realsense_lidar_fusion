@@ -110,8 +110,8 @@ class LidarCameraProjectionNode(Node):
 
         self.ts = ApproximateTimeSynchronizer(
             [self.image_sub, self.lidar_sub],
-            queue_size=5,
-            slop=0.07
+            queue_size=50,
+            slop=0.2
         )
         self.ts.registerCallback(self.sync_callback)
 
@@ -122,6 +122,18 @@ class LidarCameraProjectionNode(Node):
         self.skip_rate = 1
 
     def sync_callback(self, image_msg: Image, lidar_msg: PointCloud2):
+        # ВРЕМЕННЫЙ ОТЛАДОЧНЫЙ КОД
+        self.get_logger().info("✅ SYNCHRONIZED! Starting projection...")
+        
+        # Логирование времени
+        img_time = image_msg.header.stamp.sec + image_msg.header.stamp.nanosec * 1e-9
+        lidar_time = lidar_msg.header.stamp.sec + lidar_msg.header.stamp.nanosec * 1e-9
+        time_diff = abs(img_time - lidar_time) * 1000
+        
+        self.get_logger().info(f"📊 Time difference: {time_diff:.1f} ms")
+        self.get_logger().info(f"🖼️  Image time: {image_msg.header.stamp.sec}.{image_msg.header.stamp.nanosec}")
+        self.get_logger().info(f"📍 Lidar time: {lidar_msg.header.stamp.sec}.{lidar_msg.header.stamp.nanosec}")
+
         cv_image = self.bridge.imgmsg_to_cv2(image_msg, desired_encoding='bgr8')
 
         xyz_lidar = pointcloud2_to_xyz_array_fast(lidar_msg, skip_rate=self.skip_rate)
@@ -140,8 +152,9 @@ class LidarCameraProjectionNode(Node):
         xyz_cam_h = xyz_lidar_h @ self.T_lidar_to_cam.T
         xyz_cam = xyz_cam_h[:, :3]
 
-        mask_in_front = (xyz_cam[:, 2] > 0.0)
-        xyz_cam_front = xyz_cam[mask_in_front]
+        # mask_in_front = (xyz_cam[:, 2] > 0.0)
+        # xyz_cam_front = xyz_cam[mask_in_front]
+        xyz_cam_front = xyz_cam 
         n_front = xyz_cam_front.shape[0]
         if n_front == 0:
             self.get_logger().info("No points in front of camera (z>0).")
@@ -150,22 +163,63 @@ class LidarCameraProjectionNode(Node):
             self.pub_image.publish(out_msg)
             return
         
-        rvec = np.zeros((3,1), dtype=np.float64)
-        tvec = np.zeros((3,1), dtype=np.float64)
-        image_points, _ = cv2.projectPoints(
-            xyz_cam_front,
-            rvec, tvec,
-            self.camera_matrix,
-            self.dist_coeffs
-        )
-        image_points = image_points.reshape(-1, 2)
+        self.get_logger().info(f"Points to project: {n_front}")
+        self.get_logger().info(f"xyz_cam_front shape: {xyz_cam_front.shape}")
+        self.get_logger().info(f"xyz_cam_front dtype: {xyz_cam_front.dtype}")
+        
+        # Явное преобразование типа и формы
+        xyz_cam_front = xyz_cam_front.astype(np.float64)
+        xyz_cam_front = xyz_cam_front.reshape(-1, 3)
+
+        rvec = np.zeros((3, 1), dtype=np.float64)
+        tvec = np.zeros((3, 1), dtype=np.float64)
+        
+        # Проверка формы
+        if xyz_cam_front.shape[1] != 3:
+            self.get_logger().error(f"Invalid shape: {xyz_cam_front.shape}")
+            return
+
+        try:
+            image_points, _ = cv2.projectPoints(
+                xyz_cam_front,
+                rvec, tvec,
+                self.camera_matrix,
+                self.dist_coeffs
+            )
+            image_points = image_points.reshape(-1, 2)
+        except cv2.error as e:
+            self.get_logger().error(f"OpenCV error: {e}")
+            self.get_logger().error(f"Data shape: {xyz_cam_front.shape}")
+            self.get_logger().error(f"Data type: {xyz_cam_front.dtype}")
+            return
+
+        # h, w = cv_image.shape[:2]
+        # for (u, v) in image_points:
+        #     u_int = int(u + 0.5)
+        #     v_int = int(v + 0.5)
+        #     if 0 <= u_int < w and 0 <= v_int < h:
+        #         cv2.circle(cv_image, (u_int, v_int), 2, (0, 255, 0), -1)
+
 
         h, w = cv_image.shape[:2]
+        points_drawn = 0
         for (u, v) in image_points:
             u_int = int(u + 0.5)
             v_int = int(v + 0.5)
             if 0 <= u_int < w and 0 <= v_int < h:
-                cv2.circle(cv_image, (u_int, v_int), 2, (0, 255, 0), -1)
+                # Цвет зависит от глубины
+                idx = np.where((image_points == [u, v]).all(axis=1))[0][0]
+                z_val = xyz_cam_front[idx, 2]
+                
+                if z_val > 0:
+                    color = (0, 255, 0)  # зеленый - перед камерой
+                else:
+                    color = (0, 0, 255)  # красный - позади камеры
+                    
+                cv2.circle(cv_image, (u_int, v_int), 3, color, -1)
+                points_drawn += 1
+        
+        self.get_logger().info(f"Points drawn on image: {points_drawn}")
 
         out_msg = self.bridge.cv2_to_imgmsg(cv_image, encoding='bgr8')
         out_msg.header = image_msg.header

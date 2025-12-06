@@ -88,29 +88,141 @@ class ImageCloudCorrespondenceNode(Node):
         if pcd.is_empty():
             self.get_logger().error(f"Empty or invalid point cloud: {pcd_path}")
             return []
+        
+        # Координаты стола из твоих точек
+        table_points = np.array([
+            [0.372859, 0.517000, -0.655153],  # Точка 1
+            [0.801100, 0.503000, -0.707209],  # Точка 2  
+            [0.782560, -0.666000, -0.702933], # Точка 3
+            [0.419048, -0.587999, -0.617423]  # Точка 4
+        ])
+        
+        # Вычисляем границы стола с запасом
+        min_bound = table_points.min(axis=0) - np.array([0.1, 0.1, 0.05])  # Запас 10 см по бокам, 5 см по высоте
+        max_bound = table_points.max(axis=0) + np.array([0.1, 0.1, 0.05])  # Запас 10 см по бокам, 5 см по высоте
+        
+        self.get_logger().info(f"\nГраницы стола:")
+        self.get_logger().info(f"min: ({min_bound[0]:.3f}, {min_bound[1]:.3f}, {min_bound[2]:.3f})")
+        self.get_logger().info(f"max: ({max_bound[0]:.3f}, {max_bound[1]:.3f}, {max_bound[2]:.3f})")
+        
+        # Обрезаем облако вокруг стола
+        cropped_pcd = self.crop_point_cloud(pcd, min_bound, max_bound)
+        
+        if len(cropped_pcd.points) == 0:
+            self.get_logger().warn("Не удалось обрезать облако. Возможно, координаты неверны.")
+            self.get_logger().info("Продолжаю с полным облаком...")
+            cropped_pcd = pcd
+        else:
+            original_count = len(pcd.points)
+            cropped_count = len(cropped_pcd.points)
+            reduction = (1 - cropped_count/original_count) * 100
+            self.get_logger().info(f"\nОблако обрезано:")
+            self.get_logger().info(f"Было: {original_count} точек")
+            self.get_logger().info(f"Стало: {cropped_count} точек")
+            self.get_logger().info(f"Удалено: {reduction:.1f}% точек")
+        
+        # Визуализируем и выбираем точки
+        return self.visualize_and_pick(cropped_pcd, table_points)
 
-        self.get_logger().info("\n[Open3D Instructions]")
-        self.get_logger().info("  - Shift + left click to select a point")
-        self.get_logger().info("  - Press 'q' or ESC to close the window when finished\n")
+    def crop_point_cloud(self, pcd, min_bound, max_bound):
+        """Обрезает облако точек по заданным границам"""
+        points = np.asarray(pcd.points)
+        
+        if len(points) == 0:
+            return o3d.geometry.PointCloud()
+        
+        # Маска точек внутри границ
+        mask = np.all((points >= min_bound) & (points <= max_bound), axis=1)
+        
+        cropped_pcd = o3d.geometry.PointCloud()
+        cropped_pcd.points = o3d.utility.Vector3dVector(points[mask])
+        
+        if pcd.has_colors() and len(pcd.colors) > 0:
+            colors = np.asarray(pcd.colors)
+            if len(colors) == len(points):
+                cropped_pcd.colors = o3d.utility.Vector3dVector(colors[mask])
+        
+        return cropped_pcd
 
+    def visualize_and_pick(self, pcd, table_corners=None):
+        """Визуализация и выбор точек из облака"""
+        self.get_logger().info("\n" + "="*60)
+        self.get_logger().info("ИНСТРУКЦИЯ ДЛЯ ТОЧНОГО ВЫБОРА:")
+        self.get_logger().info("1. Вы видите ОБРЕЗАННОЕ облако - только стол")
+        self.get_logger().info("2. Приблизьтесь колесиком мыши к кубику")
+        self.get_logger().info("3. Кубик должен занимать большую часть экрана")
+        self.get_logger().info("4. Shift+ЛКМ - выбрать точку на кубике")
+        self.get_logger().info("5. Q - завершить выбор")
+        self.get_logger().info("="*60 + "\n")
+        
+        # Если есть углы стола, добавим их как маркеры
+        if table_corners is not None:
+            # Создаем маркеры для углов стола (маленькие сферы)
+            corner_markers = []
+            for i, corner in enumerate(table_corners):
+                sphere = o3d.geometry.TriangleMesh.create_sphere(radius=0.01)  # 1 см радиус
+                sphere.translate(corner)
+                sphere.paint_uniform_color([1, 0, 0])  # Красный
+                corner_markers.append(sphere)
+        
         vis = o3d.visualization.VisualizerWithEditing()
-        vis.create_window(window_name="Select points on the cloud", width=1280, height=720)
+        vis.create_window(
+            window_name="Выбор точек на КУБИКАХ (приблизьтесь!)", 
+            width=1600, 
+            height=900
+        )
         vis.add_geometry(pcd)
-
-        render_opt = vis.get_render_option()
-        render_opt.point_size = 2.0
-
+        
+        # Добавляем маркеры углов стола
+        if table_corners is not None:
+            for marker in corner_markers:
+                vis.add_geometry(marker)
+        
+        # Настройки рендеринга
+        opt = vis.get_render_option()
+        opt.point_size = 3.5  # Нормальный размер для обрезанного облака
+        opt.background_color = np.asarray([0.0, 0.0, 0.0])
+        
+        # Делаем точки яркими для лучшей видимости
+        if not pcd.has_colors() or len(pcd.colors) == 0:
+            colors = np.ones((len(pcd.points), 3))  # Белый цвет
+            pcd.colors = o3d.utility.Vector3dVector(colors)
+        
+        # Настраиваем камеру чтобы автоматически приблизиться к столу
+        if len(pcd.points) > 0:
+            ctr = vis.get_view_control()
+            
+            # Получаем ограничивающую рамку
+            bbox = pcd.get_axis_aligned_bounding_box()
+            center = bbox.get_center()
+            
+            # Устанавливаем камеру - ПРАВИЛЬНАЯ ОРИЕНТАЦИЯ
+            ctr.set_lookat(center)           # Смотрим на центр стола
+            ctr.set_up([0, -1, 0])       # Z вверх (вертикально)
+            ctr.set_front([0, 0, -1])  # Смотрим сбоку
+            ctr.set_zoom(1.0)                # Ближе, чем обычно
+            
+            self.get_logger().info(f"Камера нацелена на центр стола: ({center[0]:.3f}, {center[1]:.3f}, {center[2]:.3f})")
         vis.run()
         vis.destroy_window()
+        
+        # Получаем выбранные точки
         picked_indices = vis.get_picked_points()
-
         np_points = np.asarray(pcd.points)
+        
+        # Фильтруем - убираем маркеры углов стола (если они были выбраны)
+        # Маркеры имеют индексы после точек облака
+        valid_pcd_indices = [idx for idx in picked_indices if idx < len(np_points)]
+        
         picked_xyz = []
-        for idx in picked_indices:
-            xyz = np_points[idx]
-            picked_xyz.append((float(xyz[0]), float(xyz[1]), float(xyz[2])))
-            self.get_logger().info(f"Cloud: index={idx}, coords=({xyz[0]:.3f}, {xyz[1]:.3f}, {xyz[2]:.3f})")
-
+        for idx in valid_pcd_indices:
+            if idx < len(np_points):
+                xyz = np_points[idx]
+                picked_xyz.append((float(xyz[0]), float(xyz[1]), float(xyz[2])))
+                self.get_logger().info(f"Выбрана точка {len(picked_xyz)}: ({xyz[0]:.4f}, {xyz[1]:.4f}, {xyz[2]:.4f})")
+        
+        self.get_logger().info(f"\nИтого выбрано {len(picked_xyz)} точек на кубиках")
+        
         return picked_xyz
 
     def process_file_pairs(self):
@@ -130,9 +242,11 @@ class ImageCloudCorrespondenceNode(Node):
             self.get_logger().info(f"Point Cloud: {pcd_path}")
             self.get_logger().info("========================================\n")
 
+            self.get_logger().info(f"\nОткрывается изображение: {os.path.basename(png_path)}")
             image_points = self.pick_image_points(png_path)
             self.get_logger().info(f"\nSelected {len(image_points)} points in the image.\n")
 
+            self.get_logger().info(f"\nОткрывается облако точек: {os.path.basename(pcd_path)}")
             cloud_points = self.pick_cloud_points(pcd_path)
             self.get_logger().info(f"\nSelected {len(cloud_points)} points in the cloud.\n")
 
