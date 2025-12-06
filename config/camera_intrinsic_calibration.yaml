@@ -1,0 +1,89 @@
+camera_matrix:
+  rows: 3
+  columns: 3
+  data: [[910.412841796875, 0.0, 643.3145751953125], [0.0, 909.8240966796875, 368.3145751953125], [0.0, 0.0, 1.0]]
+
+distortion_coefficients:
+  rows: 1
+  columns: 5
+  data: [0.0, 0.0, 0.0, 0.0, 0.0]
+
+image_size:
+  width: 1280
+  height: 720
+
+
+
+
+# camera_matrix:
+#   rows: 3
+#   columns: 3
+#   data: [[606.94, 0.0, 322.21], [0.0, 606.55, 245.54], [0.0, 0.0, 1.0]]
+
+# distortion_coefficients:
+#   rows: 1
+#   columns: 5
+#   data: [0.0, 0.0, 0.0, 0.0, 0.0]
+
+# image_size:
+#   width: 640
+#   height: 480
+
+
+
+#   header:
+#   stamp:
+#     sec: 1764953698
+#     nanosec: 127735107
+#   frame_id: camera_color_optical_frame
+# height: 720
+# width: 1280
+# distortion_model: plumb_bob
+# d:
+# - 0.0
+# - 0.0
+# - 0.0
+# - 0.0
+# - 0.0
+# k:
+# - 910.412841796875
+# - 0.0
+# - 643.3145751953125
+# - 0.0
+# - 909.8240966796875
+# - 368.3145751953125
+# - 0.0
+# - 0.0
+# - 1.0
+# r:
+# - 1.0
+# - 0.0
+# - 0.0
+# - 0.0
+# - 1.0
+# - 0.0
+# - 0.0
+# - 0.0
+# - 1.0
+# p:
+# - 910.412841796875
+# - 0.0
+# - 643.3145751953125
+# - 0.0
+# - 0.0
+# - 909.8240966796875
+# - 368.3145751953125
+# - 0.0
+# - 0.0
+# - 0.0
+# - 1.0
+# - 0.0
+# binning_x: 0
+# binning_y: 0
+# roi:
+#   x_offset: 0
+#   y_offset: 0
+#   height: 0
+#   width: 0
+#   do_rectify: false
+# ---
